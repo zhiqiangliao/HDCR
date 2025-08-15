@@ -1,8 +1,9 @@
 import numpy as np
 from scipy import sparse
 
-from constant import convex, concave
+from .constant import convex, concave
 from cvxpy.atoms.norm import norm
+from cvxpy import reshape
 
 
 # Calculate yhat in testing sample
@@ -30,6 +31,64 @@ def yhat(alpha, beta, x_test, shape=convex):
 
     return yhat
 
+def fyhat(f, beta, mu, x_train, x_test, fun=convex):
+
+    n, d = x_train.shape
+    n_test, d_test = x_test.shape
+
+    yhat = np.zeros((n_test, d_test))
+
+    for j in range(n_test):
+        for k in range(d):
+            for i in range(n):
+                if fun == concave:
+                    yhat[j,k] = (f[i,k] + beta[i,k]*(x_test[j,k] - x_train[i,k])).min(axis=0)
+                elif fun == convex:
+                    yhat[j,k] = (f[i,k] + beta[i,k]*(x_test[j,k] - x_train[i,k])).max(axis=0)
+
+    fyhat = np.sum(yhat, axis=1) + mu
+    
+    return fyhat
+
+# calculate the index of training set
+def index_tr(k, i_kfold):
+    
+    i_kfold_without_k = i_kfold[:k] + i_kfold[(k + 1):]
+    flatlist = [item for elem in i_kfold_without_k for item in elem]
+
+    return flatlist
+
+def calculate_jaccard_similarity(selected_set):
+    """
+    Calculate the Jaccard similarity for a set of selected sets.
+    
+    Parameters:
+    selected_set: list of sets - Simulated selected variable sets from different runs
+    
+    Returns:
+    float - The Jaccard similarity score.
+    """
+    if not selected_set:
+        return 0.0
+    
+    # Compute Jaccard similarities for all pairs
+    jaccard_similarities = []
+    for i in range(len(selected_set)):
+        for j in range(i + 1, len(selected_set)):
+            intersection = np.intersect1d(selected_set[i], selected_set[j])
+            union = np.union1d(selected_set[i], selected_set[j])
+            if len(union) > 0:
+                jaccard_similarity = len(intersection) / len(union)
+            else:
+                jaccard_similarity = 0.0
+            jaccard_similarities.append(jaccard_similarity)
+
+    # Return the average Jaccard similarity
+    if jaccard_similarities:
+        return np.mean(jaccard_similarities)
+    else:
+        return 0.0
+
 def calculate_f1_score(true_support_set, estimated_support_set):
     # Convert sets to lists to ensure compatibility with sklearn
     true_support_list = list(true_support_set)
@@ -54,10 +113,6 @@ def calculate_f1_score(true_support_set, estimated_support_set):
     return f1   
 
 def _calculate_matrix_A(n):
-    '''
-    function to calculate matrix A in the constraint A*theta + B*xi >= 0
-    '''
-
     res = np.zeros((n*(n-1), n))
     k = 0
     for i in range(n):
@@ -69,10 +124,6 @@ def _calculate_matrix_A(n):
     return res
 
 def _calculate_matrix_B(x, n, d):
-    '''
-    function to calculate matrix B in the constraint A*theta + B*xi >= 0
-    '''
-
     num_rows = n * (n - 1)
     num_cols = n * d
 
@@ -93,10 +144,6 @@ def _calculate_matrix_B(x, n, d):
     return -sparse_matrix
 
 def _shape_constraint(A, B, Xi, theta, shape=convex, positive=False):
-    '''
-    function to generate the shape constraint A*theta + B*xi >= 0 or A*theta + B*xi <= 0
-    for the optimization problem
-    '''
 
     if shape == convex:
         cons_shape = A @ theta + B @ Xi >= 0
@@ -117,13 +164,6 @@ def _Lipschitz_norm(Xi, n, d, l):
 
     return cons_Lipschitz
 
-def _Lipschitz_norm1(Xi, n, d, l):
-    cons_Lipschitz = []
-    for i in range(n):
-        cons_Lipschitz.append(norm(Xi[i*d:(i+1)*d], 1) <= l)
-
-    return cons_Lipschitz
-
 def _L1_norm(Xi, n, d):
     cons_L1 = []
     for i in range(n):
@@ -131,12 +171,12 @@ def _L1_norm(Xi, n, d):
 
     return sum(cons_L1)
 
-def _Linf_norm(Xi, n, d):
-    cons_Linf = []
-    for i in range(d):
-        cons_Linf.append(norm(Xi[i:n*d:d], 'inf'))
-    
-    return sum(cons_Linf)
+def _L2_norm(Xi, n, d):
+    cons_L2 = []
+    for i in range(n):
+        cons_L2.append(norm(Xi[i*d:(i+1)*d], 2))
+
+    return sum(cons_L2)
 
 def _Linf_weightnorm(Xi, n, d, w):
     cons_Linf = []
@@ -144,7 +184,6 @@ def _Linf_weightnorm(Xi, n, d, w):
         cons_Linf.append(w[i]*norm(Xi[i:n*d:d], 'inf'))
     
     return sum(cons_Linf)
-
 
 def _bigM_bound(Xi, n, d, bigM, z):
     cons_Up = []
@@ -162,3 +201,84 @@ def _loss_function(y, f, mu, n):
         loss.append((y[i] - sum(f[i,:]) - mu)**2)
 
     return sum(loss)
+
+def _fshape_constraint(n, d, beta, shape=convex, positive=False):
+    cons_shape = []
+
+    for k in range(d):
+        for i in range(n-2):
+            if shape == convex:
+                cons_shape.append(beta[i+1,k] - beta[i,k] >= 0)
+            elif shape == concave:
+                cons_shape.append(beta[i+1,k] - beta[i,k] <= 0)
+
+    if positive:
+        cons_positive = beta >= 0.0
+        return cons_shape.append(cons_positive)
+    else:
+        return cons_shape
+
+def _zero_constraint(f, d):
+    cons_zero = []
+    for k in range(d):
+        cons_zero.append(sum(f[:,k]) == 0)
+
+    return cons_zero
+
+def _regression_constraint(f, x, beta, n, d):
+    cons_reg = []
+    for k in range(d):
+        for i in range(n-1):
+            cons_reg.append(f[i+1,k] == f[i,k] + beta[i,k]*(x[i+1,k] - x[i,k]))
+
+    return cons_reg
+
+def _finf_norm(f, d):
+    cons_inf = []
+    for i in range(d):
+        cons_inf.append(norm(f[:,i], 'inf'))
+
+    return sum(cons_inf)
+
+def _fl2_norm(f, d):
+    cons_l2 = []
+    for i in range(d):
+        cons_l2.append(norm(f[:,i], 1))
+
+    return sum(cons_l2)
+
+def variable_selection(beta):
+    n, d = beta.shape
+    idx = [i for i in range(d) if np.max(beta[:,i]) != 0]
+
+    return idx
+
+def trans_list(li):
+    if type(li) == list:
+        return li
+    return li.tolist()
+
+
+def to_1d_list(li):
+    if type(li) == int or type(li) == float:
+        return [li]
+    if type(li[0]) == list:
+        rl = []
+        for i in range(len(li)):
+            rl.append(li[i][0])
+        return rl
+    return li
+
+
+def to_2d_list(li):
+    if type(li[0]) != list:
+        rl = []
+        for value in li:
+            rl.append([value])
+        return rl
+    return li
+
+def x_sort(x):
+    x = np.asarray(x)
+    x = np.sort(x, axis=0)
+    return x
