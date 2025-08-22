@@ -6,7 +6,7 @@ import random
 import DGP
 from src.tools import yhat
 from src.constant import convex, concave
-from src.estimators import SLasso, Lasso
+from src.estimators import SLasso, CNLS
 
 np.random.seed(0)
 random.seed(0)
@@ -26,9 +26,9 @@ x, y, y_true, support = DGP.convexfunc_sparse(n+1000, d, s, rho, SNR)
 x_tr, y_tr, y_tr_true = x[:n,:], y[:n], y_true[:n]
 x_te, y_te, y_te_true = x[-1000:,:], y_true[-1000:], y_true[-1000:]
 
-# fit the Lasso model
-alpha, beta = Lasso(x_tr, y_tr, c=1, shape=func, positive=False)
-# compute the weights for the ASLasso model
+# fit the CNLS model
+alpha, beta = CNLS(x_tr, y_tr, shape=func, positive=False)
+# compute the weights for the SLasso model
 weights = 1/(np.sum(beta**2, axis=0))
 # standardize the weights
 weights = weights/np.max(weights)*d

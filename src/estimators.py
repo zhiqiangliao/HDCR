@@ -94,7 +94,7 @@ def ENet(x, y, lm, gm, shape=convex, positive=False):
 
     return alpha, beta
 
-def CNLS(x, y, c=1.0, shape=convex, positive=False):
+def CNLS(x, y, c=0.1, shape=convex, positive=False):
     n, d = x.shape
     A = _calculate_matrix_A(n)
     B = _calculate_matrix_B(x, n, d)
